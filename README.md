@@ -19,6 +19,7 @@ This tool extracts the image data and converts it to standard PNG format for vie
   h5py
   pillow
   numpy
+  tqdm
   ```
 
 ## Installation
@@ -56,6 +57,28 @@ This creates a `converted/` subfolder with the PNG output.
 python converter.py /path/to/images /path/to/output
 ```
 
+### Copy JPEG Files
+
+Also copy any JPEG files found in the source folder to the output:
+
+```bash
+python converter.py /path/to/images --copy-jpeg
+# or
+python converter.py /path/to/images -j
+```
+
+### Delete Source Files
+
+Delete the original `.raw`/`.usr` files after successful conversion:
+
+```bash
+python converter.py /path/to/images --delete-source
+# or
+python converter.py /path/to/images -d
+```
+
+**Warning**: This permanently deletes the source files. Make sure your output folder is correct!
+
 ### Quiet Mode
 
 For large batches (e.g., 90GB of data), use quiet mode to suppress per-file messages:
@@ -75,7 +98,27 @@ python converter.py ./images ./converted_ultrasounds
 
 # Process large dataset quietly
 python converter.py /Volumes/External/UltrasoundData /Volumes/External/Output -q
+
+# Convert RAW files AND copy JPEGs to output folder
+python converter.py ./mixed_folder ./output --copy-jpeg
+
+# Full example: quiet mode with JPEG copying
+python converter.py /path/to/90gb/folder /path/to/output -q -j
+
+# Convert, copy JPEGs, and delete source files
+python converter.py /path/to/90gb/folder /path/to/output -j -d
+
+# All options: quiet, copy JPEGs, delete sources
+python converter.py /path/to/90gb/folder /path/to/output -q -j -d
 ```
+
+## Features
+
+- **Progress bar**: Visual progress indicator using tqdm
+- **Nested folder support**: Preserves directory structure in output
+- **JPEG copying**: Optionally copy JPEG files to output
+- **Source deletion**: Optionally delete source files after conversion
+- **Auto-creates output folder**: Creates destination directory if it doesn't exist
 
 ## Output
 

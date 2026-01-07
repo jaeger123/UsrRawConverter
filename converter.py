@@ -7,18 +7,21 @@ These files are Hierarchical Data Format version 5 (HDF5) containing ultrasound 
 
 Usage:
     python converter.py <input_folder> [output_folder]
+    python converter.py <input_folder> [output_folder] --copy-jpeg
 
 If output_folder is not specified, creates a 'converted' subfolder in input_folder.
 """
 
 import os
 import sys
+import shutil
 import argparse
 from pathlib import Path
 
 import h5py
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 
 def find_ultrasound_data(hdf_file):
@@ -135,14 +138,28 @@ def is_settings_file(hdf_file):
     return False
 
 
-def convert_file(input_path, output_dir, verbose=True):
+def convert_file(input_path, output_dir, relative_path=None, verbose=True):
     """
     Convert a single .usr or .raw file to PNG.
+
+    Args:
+        input_path: Path to the input file
+        output_dir: Base output directory
+        relative_path: Relative path from input root (preserves folder structure)
+        verbose: Print progress messages
+
     Returns tuple: (list of output file paths, is_settings_file boolean)
     """
     output_files = []
     input_path = Path(input_path)
     output_dir = Path(output_dir)
+
+    # If relative path provided, preserve folder structure
+    if relative_path:
+        file_output_dir = output_dir / relative_path.parent
+        file_output_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        file_output_dir = output_dir
 
     base_name = input_path.stem
 
@@ -151,14 +168,14 @@ def convert_file(input_path, output_dir, verbose=True):
             # Check if this is a settings-only file
             if is_settings_file(f):
                 if verbose:
-                    print(f"  Skipping: Settings/config file (no image data)")
+                    tqdm.write(f"  Skipping: Settings/config file (no image data)")
                 return output_files, True  # Return flag indicating settings file
             # Try to extract raw ultrasound data
             raw_data, raw_path = extract_raw_ultrasound(f)
 
             if raw_data is not None:
                 if verbose:
-                    print(f"  Found raw ultrasound data: {raw_data.shape}")
+                    tqdm.write(f"  Found raw ultrasound data: {raw_data.shape}")
 
                 # Enhance and save
                 enhanced = enhance_ultrasound_image(raw_data)
@@ -172,25 +189,25 @@ def convert_file(input_path, output_dir, verbose=True):
                     new_size = (int(width * scale), int(height * scale))
                     img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-                output_path = output_dir / f"{base_name}_ultrasound.png"
+                output_path = file_output_dir / f"{base_name}_ultrasound.png"
                 img.save(output_path)
                 output_files.append(output_path)
                 if verbose:
-                    print(f"  Saved: {output_path}")
+                    tqdm.write(f"  Saved: {output_path}")
 
             # Try to extract preview/titlebar image
             preview_data, mode, preview_path = extract_preview_image(f)
 
             if preview_data is not None:
                 if verbose:
-                    print(f"  Found preview image: {preview_data.shape}")
+                    tqdm.write(f"  Found preview image: {preview_data.shape}")
 
                 img = Image.fromarray(preview_data, mode)
-                output_path = output_dir / f"{base_name}_preview.png"
+                output_path = file_output_dir / f"{base_name}_preview.png"
                 img.save(output_path)
                 output_files.append(output_path)
                 if verbose:
-                    print(f"  Saved: {output_path}")
+                    tqdm.write(f"  Saved: {output_path}")
 
             # If neither worked, try to find any image-like data
             if not output_files:
@@ -208,33 +225,91 @@ def convert_file(input_path, output_dir, verbose=True):
                             img = Image.fromarray(data)
 
                         safe_name = img_path.replace('/', '_')
-                        output_path = output_dir / f"{base_name}_{safe_name}.png"
+                        output_path = file_output_dir / f"{base_name}_{safe_name}.png"
                         img.save(output_path)
                         output_files.append(output_path)
                         if verbose:
-                            print(f"  Saved: {output_path}")
+                            tqdm.write(f"  Saved: {output_path}")
                     except Exception as e:
                         if verbose:
-                            print(f"  Warning: Could not extract {img_path}: {e}")
+                            tqdm.write(f"  Warning: Could not extract {img_path}: {e}")
 
     except Exception as e:
         if verbose:
-            print(f"  Error processing {input_path}: {e}")
+            tqdm.write(f"  Error processing {input_path}: {e}")
 
     return output_files, False  # Not a settings file
 
 
-def convert_folder(input_folder, output_folder=None, verbose=True):
+def copy_jpeg_files(input_folder, output_folder, verbose=True):
+    """
+    Find and copy all JPEG files from input folder to output folder.
+    Preserves relative folder structure.
+
+    Returns:
+        dict with 'copied' count and 'files' list
+    """
+    input_folder = Path(input_folder)
+    output_folder = Path(output_folder)
+
+    # Find all JPEG files
+    jpeg_files = []
+    for ext in ['*.jpg', '*.jpeg', '*.JPG', '*.JPEG']:
+        jpeg_files.extend(input_folder.rglob(ext))
+
+    jpeg_files = sorted(set(jpeg_files))
+
+    stats = {'copied': 0, 'files': []}
+
+    if not jpeg_files:
+        return stats
+
+    if verbose:
+        print(f"Found {len(jpeg_files)} JPEG files to copy")
+
+    # Create progress bar for JPEG copying
+    pbar = tqdm(jpeg_files, desc="Copying JPEGs", unit="file", disable=False)
+
+    for file_path in pbar:
+        try:
+            # Preserve relative path structure
+            rel_path = file_path.relative_to(input_folder)
+            dest_path = output_folder / rel_path
+
+            # Update progress bar
+            pbar.set_postfix_str(f"{rel_path.name[:30]}")
+
+            # Create parent directories if needed
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Copy the file
+            shutil.copy2(file_path, dest_path)
+            stats['copied'] += 1
+            stats['files'].append(dest_path)
+
+            if verbose:
+                tqdm.write(f"Copied: {rel_path}")
+
+        except Exception as e:
+            if verbose:
+                tqdm.write(f"Failed to copy {file_path.name}: {e}")
+
+    return stats
+
+
+def convert_folder(input_folder, output_folder=None, copy_jpeg=False, delete_source=False, verbose=True):
     """
     Convert all .usr and .raw files in a folder to PNG.
 
     Args:
         input_folder: Path to folder containing .usr/.raw files
         output_folder: Path to output folder (default: input_folder/converted)
+        copy_jpeg: If True, also copy JPEG files to output folder
+        delete_source: If True, delete source .raw/.usr files after successful conversion
         verbose: Print progress messages
 
     Returns:
-        dict with 'converted', 'skipped', 'failed' counts
+        dict with 'converted', 'skipped', 'failed', 'jpeg_copied', 'deleted' counts
     """
     input_folder = Path(input_folder)
 
@@ -258,11 +333,23 @@ def convert_folder(input_folder, output_folder=None, verbose=True):
         print(f"Output folder: {output_folder}")
         print()
 
-    stats = {'converted': 0, 'skipped': 0, 'failed': 0, 'output_files': []}
+    stats = {'converted': 0, 'skipped': 0, 'failed': 0, 'jpeg_copied': 0, 'deleted': 0, 'output_files': []}
 
-    for i, file_path in enumerate(target_files, 1):
+    # Create progress bar
+    pbar = tqdm(target_files, desc="Converting", unit="file", disable=False)
+
+    for file_path in pbar:
+        # Calculate relative path from input folder to preserve structure
+        try:
+            relative_path = file_path.relative_to(input_folder)
+        except ValueError:
+            relative_path = Path(file_path.name)
+
+        # Update progress bar description
+        pbar.set_postfix_str(f"{relative_path.name[:30]}")
+
         if verbose:
-            print(f"[{i}/{len(target_files)}] Processing: {file_path.name}")
+            tqdm.write(f"Processing: {relative_path}")
 
         # Check if it's actually an HDF5 file
         try:
@@ -271,30 +358,56 @@ def convert_folder(input_folder, output_folder=None, verbose=True):
 
             if signature[:4] != b'\x89HDF':
                 if verbose:
-                    print(f"  Skipping: Not an HDF5 file")
+                    tqdm.write(f"  Skipping: Not an HDF5 file")
                 stats['skipped'] += 1
                 continue
         except Exception as e:
             if verbose:
-                print(f"  Skipping: Cannot read file ({e})")
+                tqdm.write(f"  Skipping: Cannot read file ({e})")
             stats['skipped'] += 1
             continue
 
-        # Convert the file
-        output_files, is_settings = convert_file(file_path, output_folder, verbose)
+        # Convert the file (pass relative_path to preserve folder structure)
+        output_files, is_settings = convert_file(file_path, output_folder, relative_path, verbose)
 
         if is_settings:
             stats['skipped'] += 1  # Settings files are skipped
+            # Delete settings files too if delete_source is enabled
+            if delete_source:
+                try:
+                    file_path.unlink()
+                    stats['deleted'] += 1
+                    if verbose:
+                        tqdm.write(f"  Deleted: {file_path.name}")
+                except Exception as e:
+                    if verbose:
+                        tqdm.write(f"  Warning: Could not delete {file_path.name}: {e}")
         elif output_files:
             stats['converted'] += 1
             stats['output_files'].extend(output_files)
+            # Delete source file after successful conversion
+            if delete_source:
+                try:
+                    file_path.unlink()
+                    stats['deleted'] += 1
+                    if verbose:
+                        tqdm.write(f"  Deleted: {file_path.name}")
+                except Exception as e:
+                    if verbose:
+                        tqdm.write(f"  Warning: Could not delete {file_path.name}: {e}")
         else:
             stats['failed'] += 1
             if verbose:
-                print(f"  Failed: No image data found")
+                tqdm.write(f"  Failed: No image data found")
 
+    # Copy JPEG files if requested
+    if copy_jpeg:
         if verbose:
             print()
+            print("Copying JPEG files...")
+        jpeg_stats = copy_jpeg_files(input_folder, output_folder, verbose)
+        stats['jpeg_copied'] = jpeg_stats['copied']
+        stats['output_files'].extend(jpeg_stats['files'])
 
     return stats
 
@@ -308,11 +421,16 @@ Examples:
     python converter.py ./images
     python converter.py ./images ./output
     python converter.py /path/to/90gb/folder /path/to/output --quiet
+    python converter.py ./images --copy-jpeg    # Also copy JPEG files
         """
     )
     parser.add_argument('input_folder', help='Folder containing .usr/.raw files')
     parser.add_argument('output_folder', nargs='?', help='Output folder (default: input_folder/converted)')
     parser.add_argument('-q', '--quiet', action='store_true', help='Suppress progress messages')
+    parser.add_argument('-j', '--copy-jpeg', action='store_true',
+                        help='Also copy JPEG files to output folder')
+    parser.add_argument('-d', '--delete-source', action='store_true',
+                        help='Delete source .raw/.usr files after successful conversion')
 
     args = parser.parse_args()
 
@@ -323,15 +441,21 @@ Examples:
     stats = convert_folder(
         args.input_folder,
         args.output_folder,
+        copy_jpeg=args.copy_jpeg,
+        delete_source=args.delete_source,
         verbose=not args.quiet
     )
 
     print("=" * 50)
     print(f"Conversion complete!")
-    print(f"  Converted: {stats['converted']} files")
-    print(f"  Skipped:   {stats['skipped']} files")
-    print(f"  Failed:    {stats['failed']} files")
-    print(f"  Total PNG files created: {len(stats['output_files'])}")
+    print(f"  RAW files converted: {stats['converted']}")
+    print(f"  Files skipped:       {stats['skipped']}")
+    print(f"  Files failed:        {stats['failed']}")
+    if args.copy_jpeg:
+        print(f"  JPEGs copied:        {stats['jpeg_copied']}")
+    if args.delete_source:
+        print(f"  Source files deleted:{stats['deleted']}")
+    print(f"  Total output files:  {len(stats['output_files'])}")
 
 
 if __name__ == '__main__':
